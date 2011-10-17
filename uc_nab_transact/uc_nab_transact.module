@@ -10,17 +10,21 @@
 
 
 /**
- * Implements hook_payment_gateway().
+ * Implements hook_uc_payment_gateway().
  */
-function uc_nab_transact_payment_gateway() {
+function uc_nab_transact_uc_payment_gateway() {
+  if (!module_exists('uc_credit')) {
+    drupal_set_message(t('You must <a href="@modules">enable the Credit Card module</a> to use the NAB payment gateway.', array('@modules' => url('admin/modules', array('fragment' => 'edit-modules-ubercart-payment')))), 'warning');
+    return;
+  }
   $gateways = array();
 
-  $gateways[] = array(
-    'id' => 'nab_transact',
+  $gateways['nab_transact'] = array(
     'title' => t('NAB Transact'),
     'description' => t('Process credit card payments using the NAB Transact XML API.'),
     'settings' => 'uc_nab_transact_settings_form',
     'credit' => 'uc_nab_transact_charge',
+    'credit_txn_types' => array(UC_CREDIT_AUTH_ONLY, UC_CREDIT_PRIOR_AUTH_CAPTURE, UC_CREDIT_AUTH_CAPTURE),
   );
 
   return $gateways;
