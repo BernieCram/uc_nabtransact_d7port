@@ -1,0 +1,13 @@
+; $Id: uc_nab_transact.info,v 1.2 2010/10/15 17:17:05 jmfederico Exp $
+name = NAB Transact
+description = Integrates the NAB Transact XML API for processing CC payments.
+dependencies[] = uc_credit
+package = Ubercart - payment
+
+core = 6.x
+; Information added by drupal.org packaging script on 2010-12-31
+version = "6.x-1.0"
+core = "6.x"
+project = "uc_nab_transact"
+datestamp = "1293783391"
+

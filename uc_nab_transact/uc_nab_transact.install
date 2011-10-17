@@ -1,0 +1,29 @@
+<?php
+// $Id: uc_nab_transact.install,v 1.1.2.1 2010/12/24 03:06:39 jmfederico Exp $
+
+/**
+ * @file
+ * Check requirements for this module proper operation.
+ */
+
+/**
+ * Implements hook_requirements().
+ */
+function uc_nab_transact_requirements($phase) {
+  // Ensure translations don't break at install time
+  $t = get_t();
+
+  $req = array();
+  switch ($phase) {
+    case 'install':
+    case 'runtime':
+      // Check for OpenSSL or CURL extensions. At least one is needed to make the request to NAB
+      if (!extension_loaded('openssl') && !extension_loaded('curl')) {
+        $req['uc_nab_transact_post'] = array(
+          'description' => $t('You need to have <strong>CURL</strong> or <strong>OpenSSL</strong> PHP extensions installed.'),
+          'severity' => REQUIREMENT_ERROR,
+        );
+      }
+  }
+  return $req;
+}

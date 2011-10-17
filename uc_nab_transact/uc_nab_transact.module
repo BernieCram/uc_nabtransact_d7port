@@ -1,0 +1,320 @@
+<?php
+// $Id: uc_nab_transact.module,v 1.2.2.6 2010/12/31 08:05:37 jmfederico Exp $
+
+/**
+ * @file
+ * Integrates the NAB Transact Direct XML API for processing CC payments.
+ *
+ * Sponsored by Sourdough Companion - http://sourdough.com
+ */
+
+
+/**
+ * Implements hook_payment_gateway().
+ */
+function uc_nab_transact_payment_gateway() {
+  $gateways = array();
+
+  $gateways[] = array(
+    'id' => 'nab_transact',
+    'title' => t('NAB Transact'),
+    'description' => t('Process credit card payments using the NAB Transact XML API.'),
+    'settings' => 'uc_nab_transact_settings_form',
+    'credit' => 'uc_nab_transact_charge',
+  );
+
+  return $gateways;
+}
+
+// Displays the fields for the NAB Transact settings.
+function uc_nab_transact_settings_form() {
+  $form['uc_nab_currency'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Currency code'),
+    '#description' => t('Defaults to AUD; support for other currencies is not known.'),
+    '#default_value' => variable_get('uc_nab_currency', 'AUD'),
+  );
+  $form['uc_nab_transact_po_prefix'] = array(
+    '#type' => 'textfield',
+    '#title' => t('PO prefix'),
+    '#description' => t('Enter a string to place before the order ID when specifying a PO number through NAB Transact.'),
+    '#default_value' => variable_get('uc_nab_transact_po_prefix', ''),
+  );
+
+  $form['uc_nab_transact_xml_settings'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('XML API settings'),
+    '#description' => t('This module currently only integrates the XML API provided by NAB Transact for processing credit cards.  You must fill in the appropriate information below and ensure you have SSL enabled for the site.'),
+  );
+  $form['uc_nab_transact_xml_settings']['uc_nab_xml_merchant_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Merchant ID'),
+    '#description' => t('The 7 character merchant ID for Credit Card transactions, eg: "ABC0001".'),
+    '#default_value' => variable_get('uc_nab_xml_merchant_id', ''),
+  );
+  $form['uc_nab_transact_xml_settings']['uc_nab_xml_password'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Password'),
+    '#description' => t('Your password for making XML API requests.'),
+    '#default_value' => variable_get('uc_nab_xml_password', ''),
+  );
+  $form['uc_nab_transact_xml_settings']['uc_nab_xml_mode'] = array(
+    '#type' => 'select',
+    '#title' => t('Transaction mode'),
+    '#description' => t('Transaction mode used when sending requests.'),
+    '#options' => array(
+      'test' => t('Test'),
+      'live' => t('Live'),
+    ),
+    '#default_value' => variable_get('uc_nab_xml_mode', 'test'),
+  );
+  $form['uc_nab_transact_xml_settings']['uc_nab_xml_txn_type'] = array(
+    '#type' => 'select',
+    '#title' => t('Transaction type'),
+    '#description' => t('Specify the transaction type for XML API transactions.'),
+    '#options' => array(
+      '0' => t('Standard Payment'),
+      // '10' => t('Preauthorise'),
+      // '11' => t('Preauth Complete'),
+    ),
+    '#default_value' => variable_get('uc_nab_xml_txn_type', '0'),
+  );
+
+  return $form;
+}
+
+
+/**
+ * uc_nab_transact_payment_gateway() cradit callback
+ *
+ * @param $order_id
+ *   The Id of the ordee we are about to process
+ * @param $amount
+ *   The amount we are charging
+ * @param $data
+ */
+function uc_nab_transact_charge($order_id, $amount, $data) {
+  global $user;
+
+  $order = uc_order_load($order_id);
+
+  // Pad the expiration date with a 0 for single digit months.
+  if (strlen($order->payment_details['cc_exp_month']) == 1) {
+    $order->payment_details['cc_exp_month'] = '0'. $order->payment_details['cc_exp_month'];
+  }
+
+  $data = array(
+    'txnType' => variable_get('uc_nab_xml_txn_type', '0'),
+    'txnSource' => 23,
+    'amount' => (int)($amount * 100),
+    'currency' => variable_get('uc_nab_currency', 'AUD'),
+    'purchaseOrderNo' => uc_nab_transact_po($order_id),
+    'CreditCardInfo' => array(
+      'cardNumber' => $order->payment_details['cc_number'],
+      'expiryDate' => $order->payment_details['cc_exp_month'] .'/'. substr((string)$order->payment_details['cc_exp_year'], 2),
+    ),
+  );
+
+  if (variable_get('uc_credit_cvv_enabled', TRUE)) {
+    $data['CreditCardInfo']['cvv'] = $order->payment_details['cc_cvv'];
+  }
+
+  // Get the next message ID.
+  $message_id = variable_get('uc_nab_xml_message_id', 1);
+  variable_set('uc_nab_xml_message_id', $message_id + 1);
+
+  // Build the post XML from the data array.
+  $post_data = uc_nab_transact_xml('Payment', $data, $message_id);
+
+  // Build the URL where we'll send the request.
+  $url = 'https://transact.nab.com.au/'. variable_get('uc_nab_xml_mode', 'test') .'/xmlapi/payment';
+
+  // Get the response of our payment request.
+  if (extension_loaded('openssl')) {
+    $response = drupal_http_request($url, array('Content-Type' => 'text/xml'), 'POST', $post_data);
+    $response = $response->data;
+  }
+  // if openssl extension is not loaded we use CURL
+  elseif (extension_loaded('curl')) {
+    $ch = curl_init($url);
+
+    curl_setopt($ch, CURLOPT_POST, 1);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $post_data);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+    $response = curl_exec($ch);
+    curl_close($ch);
+  }
+
+  // Include the XML parser for PHP 4 compatibility.
+  module_load_include('php', 'uc_store', 'includes/simplexml');
+
+  // Create the XML object and parse the response string.
+  $xml = simplexml_load_string($response);
+
+  // Check to make sure the response parses and payment passed properly.
+  if (isset($xml->Status->statusCode) && $xml->Status->statusCode != '000') {
+    $approval = 'No';
+    $responsecode = $xml->Status->statusCode;
+    $responsetext = $xml->Status->statusDescription;
+  }
+  elseif (isset($xml->Payment->TxnList->Txn->approved)) {
+    $approval = $xml->Payment->TxnList->Txn->approved;
+    $responsecode = $xml->Payment->TxnList->Txn->responseCode;
+    $responsetext = $xml->Payment->TxnList->Txn->responseText;
+    $charged = $xml->Payment->TxnList->Txn->amount / 100;
+    $txnid = $xml->Payment->TxnList->Txn->txnID;
+  }
+  else {
+    // Otherwise supply some default values.
+    $approval = 'No';
+    $responsecode = 'x';
+
+    // If $response is set, we made a request, error was in the response
+    if (isset($response)) {
+      $responsetext = t('Failed to parse the XML API request or response.');
+      // Log the trouble string to the watchdog.
+      watchdog('uc_nab_transact', 'Failed XML parse response:<br/>@xml', array('@xml' => $response), WATCHDOG_ERROR);
+    }
+    else {
+      $responsetext = t('Failed to make the request.');
+      // Log the trouble string to the watchdog.
+      watchdog('uc_nab_transact', 'Failed to make the request: "openssl" or "curl" PHP extensions are needed.', array(), WATCHDOG_ERROR);
+    }
+  }
+
+  if ($approval != 'Yes') {
+    $message = t('Credit card declined: !amount', array('!amount' => uc_currency_format($amount)));
+
+    $result = array(
+      'success' => FALSE,
+      'comment' => t('Credit card payment declined: @text', array('@text' => $responsetext)),
+      'message' => t('Credit card payment declined: @text', array('@text' => $responsetext)),
+      'uid' => $user->uid,
+    );
+  }
+  else {
+    $message = t('Credit card charged: !amount', array('!amount' => uc_currency_format($charged)))
+              .'<br />'. t('NAB Transact Txn ID: @txnid', array('@txnid' => $txnid));
+
+    $result = array(
+      'success' => TRUE,
+      'comment' => t('NAB Transact Txn ID: @txnid<br/>Approval code: @code', array('@txnid' => $txnid, '@code' => $responsecode)),
+      'message' => t('NAB Transact Txn ID: @txnid<br/>Approval code: @code', array('@txnid' => $txnid, '@code' => $responsecode)),
+      'data' => array('TxnID' => $txnid),
+      'uid' => $user->uid,
+    );
+  }
+
+  $message .= '<br />'. t('Response code: @code - @text', array('@code' => $responsecode, '@text' => $responsetext));
+
+  uc_order_comment_save($order_id, $user->uid, $message, 'admin');
+
+  return $result;
+}
+
+/**
+ * @return
+ *   NAB XML ready for request
+ */
+function uc_nab_transact_xml($type, $data, $message_id) {
+  if ($type !== 'Payment' && $type !== 'Echo') {
+    return;
+  }
+
+  $xml = '<?xml version="1.0" encoding="UTF-8"?><NABTransactMessage>';
+
+  // element: MessageInfo
+  $xml .= uc_nab_transact_message_info($message_id);
+
+  // element: MerchantInfo
+  $xml .= uc_nab_transact_merchant_info();
+
+  // element: RequestType
+  $xml .= '<RequestType>'. $type .'</RequestType>';
+
+  // element: Payment
+  if ($type == 'Payment') {
+    $xml .= uc_nab_transact_payment_xml($data);
+  }
+
+  $xml .= '</NABTransactMessage>';
+
+  return $xml;
+}
+
+/**
+ * @return
+ *   XML MessageInfo element
+ */
+function uc_nab_transact_message_info($message_id) {
+  return '<MessageInfo><messageID>'. substr(md5($message_id), 0, 30)
+        .'</messageID><messageTimestamp>'. uc_nab_transact_timestamp()
+        .'</messageTimestamp><timeoutValue>60</timeoutValue>'
+        .'<apiVersion>xml-4.2</apiVersion></MessageInfo>';
+}
+
+/**
+ * @return
+ *   XML MerchantInfo element
+ */
+function uc_nab_transact_merchant_info() {
+  return '<MerchantInfo><merchantID>'. variable_get('uc_nab_xml_merchant_id', '')
+        .'</merchantID><password>'. variable_get('uc_nab_xml_password', '')
+        .'</password></MerchantInfo>';
+}
+
+/**
+ * Build the XML for the payment element.
+ *
+ * NAB Transact currently only supports 1 payment at a time, hence the hard
+ * coded count and ID.
+ *
+ * @return
+ *   XML Payment element
+ */
+function uc_nab_transact_payment_xml($data) {
+  $xml = '<Payment><TxnList count="1"><Txn ID="1">';
+
+  // Create elements from array
+  foreach ($data as $key => $value) {
+    if (is_array($value)) {
+      $xml .= '<'. $key .'>';
+      // Create elements from nested array
+      foreach ($value as $arr_key => $arr_value) {
+        $xml .= '<'. $arr_key .'>'. $arr_value .'</'. $arr_key .'>';
+      }
+      $xml .= '</'. $key .'>';
+    }
+    else {
+      $xml .= '<'. $key .'>'. $value .'</'. $key .'>';
+    }
+  }
+
+  $xml .= '</Txn></TxnList></Payment>';
+
+  return $xml;
+}
+
+/**
+ * @param $time
+ *   (optional) unix timestamp
+ *
+ * @return
+ *   Date in YdmHis000000+000 (php date format)
+ */
+function uc_nab_transact_timestamp($time = NULL) {
+  if (empty($time)) {
+    $time = time();
+  }
+  // Return a formatted GMT timestamp.
+  return date('YdmHis000000+000', $time);
+}
+
+/**
+ * @return
+ *   value for purchaseOrderNo element
+ */
+function uc_nab_transact_po($order_id) {
+  return variable_get('uc_nab_transact_po_prefix', '') . $order_id;
+}
