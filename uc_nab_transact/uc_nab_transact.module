@@ -31,6 +31,10 @@ function uc_nab_transact_uc_payment_gateway() {
 }
 
 // Displays the fields for the NAB Transact settings.
+/**
+ * @todo Please document this function.
+ * @see http://drupal.org/node/1354
+ */
 function uc_nab_transact_settings_form() {
   $form['uc_nab_currency'] = array(
     '#type' => 'textfield',
@@ -104,18 +108,18 @@ function uc_nab_transact_charge($order_id, $amount, $data) {
 
   // Pad the expiration date with a 0 for single digit months.
   if (strlen($order->payment_details['cc_exp_month']) == 1) {
-    $order->payment_details['cc_exp_month'] = '0'. $order->payment_details['cc_exp_month'];
+    $order->payment_details['cc_exp_month'] = '0' . $order->payment_details['cc_exp_month'];
   }
 
   $data = array(
     'txnType' => variable_get('uc_nab_xml_txn_type', '0'),
     'txnSource' => 23,
-    'amount' => (int)($amount * 100),
+    'amount' => (int) ($amount * 100),
     'currency' => variable_get('uc_nab_currency', 'AUD'),
     'purchaseOrderNo' => uc_nab_transact_po($order_id),
     'CreditCardInfo' => array(
       'cardNumber' => $order->payment_details['cc_number'],
-      'expiryDate' => $order->payment_details['cc_exp_month'] .'/'. substr((string)$order->payment_details['cc_exp_year'], 2),
+      'expiryDate' => $order->payment_details['cc_exp_month'] . '/' . substr((string) $order->payment_details['cc_exp_year'], 2),
     ),
   );
 
@@ -131,11 +135,11 @@ function uc_nab_transact_charge($order_id, $amount, $data) {
   $post_data = uc_nab_transact_xml('Payment', $data, $message_id);
 
   // Build the URL where we'll send the request.
-  $url = 'https://transact.nab.com.au/'. variable_get('uc_nab_xml_mode', 'test') .'/xmlapi/payment';
+  $url = 'https://transact.nab.com.au/' . variable_get('uc_nab_xml_mode', 'test') . '/xmlapi/payment';
 
   // Get the response of our payment request.
   if (extension_loaded('openssl')) {
-    $response = drupal_http_request($url, array('Content-Type' => 'text/xml'), 'POST', $post_data);
+    $response = drupal_http_request($url, array('headers' => array('Content-Type' => 'text/xml'), 'method' => 'POST', 'data' => $post_data));
     $response = $response->data;
   }
   // if openssl extension is not loaded we use CURL
@@ -199,7 +203,7 @@ function uc_nab_transact_charge($order_id, $amount, $data) {
   }
   else {
     $message = t('Credit card charged: !amount', array('!amount' => uc_currency_format($charged)))
-              .'<br />'. t('NAB Transact Txn ID: @txnid', array('@txnid' => $txnid));
+              . '<br />' . t('NAB Transact Txn ID: @txnid', array('@txnid' => $txnid));
 
     $result = array(
       'success' => TRUE,
@@ -210,7 +214,7 @@ function uc_nab_transact_charge($order_id, $amount, $data) {
     );
   }
 
-  $message .= '<br />'. t('Response code: @code - @text', array('@code' => $responsecode, '@text' => $responsetext));
+  $message .= '<br />' . t('Response code: @code - @text', array('@code' => $responsecode, '@text' => $responsetext));
 
   uc_order_comment_save($order_id, $user->uid, $message, 'admin');
 
@@ -235,7 +239,7 @@ function uc_nab_transact_xml($type, $data, $message_id) {
   $xml .= uc_nab_transact_merchant_info();
 
   // element: RequestType
-  $xml .= '<RequestType>'. $type .'</RequestType>';
+  $xml .= '<RequestType>' . $type . '</RequestType>';
 
   // element: Payment
   if ($type == 'Payment') {
@@ -252,10 +256,10 @@ function uc_nab_transact_xml($type, $data, $message_id) {
  *   XML MessageInfo element
  */
 function uc_nab_transact_message_info($message_id) {
-  return '<MessageInfo><messageID>'. substr(md5($message_id), 0, 30)
-        .'</messageID><messageTimestamp>'. uc_nab_transact_timestamp()
-        .'</messageTimestamp><timeoutValue>60</timeoutValue>'
-        .'<apiVersion>xml-4.2</apiVersion></MessageInfo>';
+  return '<MessageInfo><messageID>' . substr(md5($message_id), 0, 30)
+        . '</messageID><messageTimestamp>' . uc_nab_transact_timestamp()
+        . '</messageTimestamp><timeoutValue>60</timeoutValue>'
+        . '<apiVersion>xml-4.2</apiVersion></MessageInfo>';
 }
 
 /**
@@ -263,9 +267,9 @@ function uc_nab_transact_message_info($message_id) {
  *   XML MerchantInfo element
  */
 function uc_nab_transact_merchant_info() {
-  return '<MerchantInfo><merchantID>'. variable_get('uc_nab_xml_merchant_id', '')
-        .'</merchantID><password>'. variable_get('uc_nab_xml_password', '')
-        .'</password></MerchantInfo>';
+  return '<MerchantInfo><merchantID>' . variable_get('uc_nab_xml_merchant_id', '')
+        . '</merchantID><password>' . variable_get('uc_nab_xml_password', '')
+        . '</password></MerchantInfo>';
 }
 
 /**
@@ -283,15 +287,15 @@ function uc_nab_transact_payment_xml($data) {
   // Create elements from array
   foreach ($data as $key => $value) {
     if (is_array($value)) {
-      $xml .= '<'. $key .'>';
+      $xml .= '<' . $key . '>';
       // Create elements from nested array
       foreach ($value as $arr_key => $arr_value) {
-        $xml .= '<'. $arr_key .'>'. $arr_value .'</'. $arr_key .'>';
+        $xml .= '<' . $arr_key . '>' . $arr_value . '</' . $arr_key . '>';
       }
-      $xml .= '</'. $key .'>';
+      $xml .= '</' . $key . '>';
     }
     else {
-      $xml .= '<'. $key .'>'. $value .'</'. $key .'>';
+      $xml .= '<' . $key . '>' . $value . '</' . $key . '>';
     }
   }
 
@@ -309,7 +313,7 @@ function uc_nab_transact_payment_xml($data) {
  */
 function uc_nab_transact_timestamp($time = NULL) {
   if (empty($time)) {
-    $time = time();
+    $time = REQUEST_TIME;
   }
   // Return a formatted GMT timestamp.
   return date('YdmHis000000+000', $time);
